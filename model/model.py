@@ -1,3 +1,4 @@
+import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from base import BaseModel
@@ -59,14 +60,14 @@ class KeyPointNet(BaseModel):
         self.bnLa = nn.BatchNorm2d(256)
         self.convLb = nn.Conv2d(256, 2, kernel_size=3, stride=1, padding=1)
         # Descriptor Head. TODO: determine final conv2d kernel_size and padding
-        self.convD1a = torch.nn.Conv2d(256, 256, kernel_size=3, stride=1, padding=1)
+        self.convD1a = nn.Conv2d(256, 256, kernel_size=3, stride=1, padding=1)
         self.bnD1a = nn.BatchNorm2d(256)
-        self.convD1b = torch.nn.Conv2d(256, 512, kernel_size=3, stride=1, padding=1)
+        self.convD1b = nn.Conv2d(256, 512, kernel_size=3, stride=1, padding=1)
         self.bnD1b = nn.BatchNorm2d(512)
 
-        self.convD2a = torch.nn.Conv2d(256, 256, kernel_size=3, stride=1, padding=1)
+        self.convD2a = nn.Conv2d(256, 256, kernel_size=3, stride=1, padding=1)
         self.bnD2a = nn.BatchNorm2d(256)
-        self.convD2b = torch.nn.Conv2d(256, 256, kernel_size=3, stride=1, padding=1)
+        self.convD2b = nn.Conv2d(256, 256, kernel_size=3, stride=1, padding=1)
 
 
 
@@ -121,10 +122,23 @@ class KeyPointNet(BaseModel):
         dx = self.bnD1b(self.convD1b(dx))
         # 18
         feature18 = self.pixelShuffle(dx)
-        19
+        # 19
         dx = self.bnD2a(self.convD2a(torch.cat((feature8, feature18), dim=1)))
         # 20
         descriptor = self.convD2b(dx)
 
         output = {'score': score, 'location': location, 'descriptor': descriptor}
         return output
+
+
+class IONet(BaseModel):
+    """ Pytorch definition of IONet Network. """
+
+    def __init__(self, num_classes=10):
+        super().__init__()
+        # TODO
+        pass
+
+    def forward(self, x):
+        # TODO
+        pass

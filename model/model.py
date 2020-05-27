@@ -122,7 +122,7 @@ class KeyPointNet(BaseModel):
         dx = self.bnD1b(self.convD1b(dx))
         # 18
         feature18 = self.pixelShuffle(dx)
-        19
+        # 19
         dx = self.bnD2a(self.convD2a(torch.cat((feature8, feature18), dim=1)))
         # 20
         descriptor = self.convD2b(dx)

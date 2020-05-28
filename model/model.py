@@ -28,7 +28,7 @@ class KeyPointNet(BaseModel):
 
     def __init__(self):
         super().__init__()
-        self.relu = nn.LeakyReLU(inplace=True)
+        self.lrelu = nn.LeakyReLU(inplace=True)
         self.pool = nn.MaxPool2d(kernel_size=2, stride=2, return_indices=True)
         self.dropout = nn.Dropout(p=0.2)
         self.tanh = nn.Tanh()
@@ -83,27 +83,27 @@ class KeyPointNet(BaseModel):
         """
         # Shared Encoder.
         # 1
-        x = self.relu(self.bn1a(self.conv1a(x)))
+        x = self.lrelu(self.bn1a(self.conv1a(x)))
         # 2
-        feature2 = self.dropout(self.relu(self.bn1b(self.conv1b(x))))
+        feature2 = self.dropout(self.lrelu(self.bn1b(self.conv1b(x))))
         # 3
         x, ind1 = self.pool(feature2)
         # 4 
-        x = self.relu(self.bn2a(self.conv2a(x)))
+        x = self.lrelu(self.bn2a(self.conv2a(x)))
         # 5
-        feature5 = self.dropout(self.relu(self.bn2b(self.conv2b(x))))
+        feature5 = self.dropout(self.lrelu(self.bn2b(self.conv2b(x))))
         # 6
         x , ind2 = self.pool(feature5)
         # 7
-        x = self.relu(self.bn3a(self.conv3a(x)))
+        x = self.lrelu(self.bn3a(self.conv3a(x)))
         # 8
-        feature8 = self.dropout(self.relu(self.bn3b(self.conv3b(x))))
+        feature8 = self.dropout(self.lrelu(self.bn3b(self.conv3b(x))))
         # 9
         x, ind3 = self.pool(feature8)
         # 10
-        x = self.relu(self.bn4a(self.conv4a(x)))
+        x = self.lrelu(self.bn4a(self.conv4a(x)))
         # 11
-        feature11 = self.dropout(self.relu(self.bn4b(self.conv4b(x))))
+        feature11 = self.dropout(self.lrelu(self.bn4b(self.conv4b(x))))
         
         # Score Head.
         # 12
@@ -132,13 +132,45 @@ class KeyPointNet(BaseModel):
 
 
 class IONet(BaseModel):
-    """ Pytorch definition of IONet Network. """
+    """ Pytorch definition of IONet Network. 
+        the structure from Brachmann & Rother (https://arxiv.org/abs/1905.04132)
+    """
+
 
     def __init__(self, num_classes=10):
         super().__init__()
-        # TODO
-        pass
+        self.relu = nn.ReLU(inplace=True)
+        self.conv1a = nn.Conv1d(5, 128, kernel_size=1, stride=1)
+        self.conv6a = nn.Conv1d(128, 1, kernel_size=1, stride=1)
+
+        # rei
+        self.residualBlock = nn.Sequential(
+            nn.Conv1d(128, 128, kernel_size=1, stride=1),
+            nn.InstanceNorm1d(128),
+            nn.BatchNorm1d(128),
+            nn.ReLU(inplace=True),
+        )
+
 
     def forward(self, x):
-        # TODO
-        pass
+        """ Forward pass that .
+        Input
+        x: 5-dimensional (consists of keypoint pair and descriptor distance)
+        vector pytorch tensor shaped 5 x N.
+        Output
+        label: binary inlier-outlier classification pytorch tensor shaped 1 x N
+        """
+        # 1
+        f1 = self.relu(self.conv1a(x))
+        # 2
+        f2 = self.residualBlock(f1)
+        # 3
+        f3 = self.residualBlock(torch.add(f2, f1))
+        # 4
+        f4 = self.residualBlock(torch.add(f3, f2))
+        # 5
+        f5 = self.residualBlock(torch.add(f4, f3))
+        # 6
+        label = self.conv6a(f5)
+        return label
+        

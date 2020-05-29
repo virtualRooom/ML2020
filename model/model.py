@@ -140,16 +140,31 @@ class IONet(BaseModel):
     def __init__(self, num_classes=10):
         super().__init__()
         self.relu = nn.ReLU(inplace=True)
+        self.instNorm = nn.InstanceNorm1d(128)
+        # 1
         self.conv1a = nn.Conv1d(5, 128, kernel_size=1, stride=1)
+        # 2
+        self.conv2a = nn.Conv1d(128, 128, kernel_size=1, stride=1)
+        self.bn2a = nn.BatchNorm1d(128)
+        self.conv2b = nn.Conv1d(128, 128, kernel_size=1, stride=1)
+        self.bn2b = nn.BatchNorm1d(128)
+        # 3
+        self.conv3a = nn.Conv1d(128, 128, kernel_size=1, stride=1)
+        self.bn3a = nn.BatchNorm1d(128)
+        self.conv3b = nn.Conv1d(128, 128, kernel_size=1, stride=1)
+        self.bn3b = nn.BatchNorm1d(128)
+        # 4
+        self.conv4a = nn.Conv1d(128, 128, kernel_size=1, stride=1)
+        self.bn4a = nn.BatchNorm1d(128)
+        self.conv4b = nn.Conv1d(128, 128, kernel_size=1, stride=1)
+        self.bn4b = nn.BatchNorm1d(128)
+        # 5
+        self.conv5a = nn.Conv1d(128, 128, kernel_size=1, stride=1)
+        self.bn5a = nn.BatchNorm1d(128)
+        self.conv5b = nn.Conv1d(128, 128, kernel_size=1, stride=1)
+        self.bn5b = nn.BatchNorm1d(128)
+        # 6
         self.conv6a = nn.Conv1d(128, 1, kernel_size=1, stride=1)
-
-        # rei
-        self.residualBlock = nn.Sequential(
-            nn.Conv1d(128, 128, kernel_size=1, stride=1),
-            nn.InstanceNorm1d(128),
-            nn.BatchNorm1d(128),
-            nn.ReLU(inplace=True),
-        )
 
 
     def forward(self, x):
@@ -163,13 +178,17 @@ class IONet(BaseModel):
         # 1
         f1 = self.relu(self.conv1a(x))
         # 2
-        f2 = self.residualBlock(f1)
+        f2 = self.relu(self.bn2a(self.instNorm(self.conv2a(f1))))
+        f2 = self.relu(self.bn2b(self.instNorm(self.conv2a(f2))))
         # 3
-        f3 = self.residualBlock(torch.add(f2, f1))
+        f3 = self.relu(self.bn3a(self.instNorm(self.conv2a(torch.add(f2, f1)))))
+        f3 = self.relu(self.bn3b(self.instNorm(self.conv2a(f3))))
         # 4
-        f4 = self.residualBlock(torch.add(f3, f2))
+        f4 = self.relu(self.bn4a(self.instNorm(self.conv2a(torch.add(f3, f2)))))
+        f4 = self.relu(self.bn4b(self.instNorm(self.conv2a(f4))))
         # 5
-        f5 = self.residualBlock(torch.add(f4, f3))
+        f5 = self.relu(self.bn5a(self.instNorm(self.conv2a(torch.add(f4, f3)))))
+        f5 = self.relu(self.bn5b(self.instNorm(self.conv2a(f5))))
         # 6
         label = self.conv6a(f5)
         return label

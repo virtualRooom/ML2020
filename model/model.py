@@ -2,74 +2,87 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from base import BaseModel
+from utils import rel_to_abs
 
+def vgg_block(in_channels, out_channels, pooling=True):
+    max_pool = []
+    if pooling:
+        max_pool = [nn.MaxPool2d(kernel_size=2)]
 
-class MnistModel(BaseModel):
-    def __init__(self, num_classes=10):
-        super().__init__()
-        self.conv1 = nn.Conv2d(1, 10, kernel_size=5)
-        self.conv2 = nn.Conv2d(10, 20, kernel_size=5)
-        self.conv2_drop = nn.Dropout2d()
-        self.fc1 = nn.Linear(320, 50)
-        self.fc2 = nn.Linear(50, num_classes)
+    return nn.Sequential(
+        nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=1, padding=1),
+        nn.BatchNorm2d(out_channels),
+        nn.LeakyReLU(inplace=True),
 
-    def forward(self, x):
-        x = F.relu(F.max_pool2d(self.conv1(x), 2))
-        x = F.relu(F.max_pool2d(self.conv2_drop(self.conv2(x)), 2))
-        x = x.view(-1, 320)
-        x = F.relu(self.fc1(x))
-        x = F.dropout(x, training=self.training)
-        x = self.fc2(x)
-        return F.log_softmax(x, dim=1)
+        nn.Conv2d(out_channels, out_channels, kernel_size=3, stride=1, padding=1),
+        nn.BatchNorm2d(out_channels),
+        nn.LeakyReLU(inplace=True),
+        nn.Dropout2d(p=0.2, inplace=True),
+        *max_pool
+    )
 
+def residual_block(in_channels, out_channels):
+    return nn.Sequential(
+        nn.Conv1d(in_channels, out_channels, kernel_size=1, stride=1),
+        nn.InstanceNorm1d(out_channels),
+        nn.BatchNorm1d(out_channels),
+        nn.ReLU(inplace=True),
+        nn.Conv1d(in_channels, out_channels, kernel_size=1, stride=1),
+        nn.InstanceNorm1d(out_channels),
+        nn.BatchNorm1d(out_channels),
+        nn.ReLU(inplace=True),
+    )
 
 class KeyPointNet(BaseModel):
     """ Pytorch definition of KeyPointNet Network. """
 
     def __init__(self):
         super().__init__()
-        self.lrelu = nn.LeakyReLU(inplace=True)
-        self.pool = nn.MaxPool2d(kernel_size=2, stride=2, return_indices=True)
-        self.dropout = nn.Dropout(p=0.2)
-        self.tanh = nn.Tanh()
-        self.sigmoid = nn.Sigmoid()
-        self.pixelShuffle = nn.PixelShuffle(2)
+
         # Shared Encoder.
-        self.conv1a = nn.Conv2d(3, 32, kernel_size=3, stride=1, padding=1)
-        self.bn1a = nn.BatchNorm2d(32)
-        self.conv1b = nn.Conv2d(32, 32, kernel_size=3, stride=1, padding=1)
-        self.bn1b = nn.BatchNorm2d(32)
-        self.conv2a = nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1)
-        self.bn2a = nn.BatchNorm2d(64)
-        self.conv2b = nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=1)
-        self.bn2b = nn.BatchNorm2d(64)
-        self.conv3a = nn.Conv2d(64, 128, kernel_size=3, stride=1, padding=1)
-        self.bn3a = nn.BatchNorm2d(128)
-        self.conv3b = nn.Conv2d(128, 128, kernel_size=3, stride=1, padding=1)
-        self.bn3b = nn.BatchNorm2d(128)
-        self.conv4a = nn.Conv2d(128, 256, kernel_size=3, stride=1, padding=1)
-        self.bn4a = nn.BatchNorm2d(256)
-        self.conv4b = nn.Conv2d(256, 256, kernel_size=3, stride=1, padding=1)
-        self.bn4b = nn.BatchNorm2d(256)
-        # Score Head. TODO: determine final conv2d kernel_size and padding
-        self.convSa = nn.Conv2d(256, 256, kernel_size=3, stride=1, padding=1)
-        self.bnSa = nn.BatchNorm2d(256)
-        self.convSb = nn.Conv2d(256, 1, kernel_size=3, stride=1, padding=1)
-        # Location Head. TODO: determine final conv2d kernel_size and padding
-        self.convLa = nn.Conv2d(256, 256, kernel_size=3, stride=1, padding=1)
-        self.bnLa = nn.BatchNorm2d(256)
-        self.convLb = nn.Conv2d(256, 2, kernel_size=3, stride=1, padding=1)
-        # Descriptor Head. TODO: determine final conv2d kernel_size and padding
-        self.convD1a = nn.Conv2d(256, 256, kernel_size=3, stride=1, padding=1)
-        self.bnD1a = nn.BatchNorm2d(256)
-        self.convD1b = nn.Conv2d(256, 512, kernel_size=3, stride=1, padding=1)
-        self.bnD1b = nn.BatchNorm2d(512)
+        self.encoder_frontend = nn.Sequential(
+            vgg_block(3,32),
+            vgg_block(32,64),
+            vgg_block(64,128, pooling=False),
+        )
+        self.encoder_backend = nn.Sequential(
+            nn.MaxPool2d(kernel_size=2),
+            vgg_block(128, 256, pooling=False)
+        )
+       
+        # Score Head.
+        self.score_head = nn.Sequential(
+            nn.Conv2d(256, 256, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(num_features=256),
+            nn.Dropout2d(p=0.2, inplace=True),
+            nn.Conv2d(256, 1, kernel_size=3, stride=1, padding=1),
+            nn.Sigmoid(),
+        )
+        
+        # Location Head.
+        self.location_head = nn.Sequential(
+            nn.Conv2d(256, 256, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(num_features=256),
+            nn.Dropout2d(p=0.2, inplace=True),
+            nn.Conv2d(256, 2, kernel_size=3, stride=1, padding=1),
+            nn.Tanh(),
+        )
 
-        self.convD2a = nn.Conv2d(256, 256, kernel_size=3, stride=1, padding=1)
-        self.bnD2a = nn.BatchNorm2d(256)
-        self.convD2b = nn.Conv2d(256, 256, kernel_size=3, stride=1, padding=1)
+        # Descriptor Head.
+        self.descriptor_head_frontend = nn.Sequential(
+            nn.Conv2d(256, 256, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(256),
+            nn.Dropout2d(p=0.2, inplace=True),
 
-
+            nn.Conv2d(256, 512, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(512),
+            nn.PixelShuffle(2),
+        )
+        self.descriptor_head_backend = nn.Sequential(
+            nn.Conv2d(256, 256, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(256),
+            nn.Conv2d(256, 256, kernel_size=3, stride=1, padding=1),
+        )
 
     def forward(self, x):
         """ Forward pass that jointly computes unprocessed point and descriptor
@@ -82,87 +95,62 @@ class KeyPointNet(BaseModel):
         descriptor: Output descriptor pytorch tensor shaped N x 256 x H/8 x W/8.
         """
         # Shared Encoder.
-        # 1
-        x = self.lrelu(self.bn1a(self.conv1a(x)))
-        # 2
-        feature2 = self.dropout(self.lrelu(self.bn1b(self.conv1b(x))))
-        # 3
-        x, ind1 = self.pool(feature2)
-        # 4 
-        x = self.lrelu(self.bn2a(self.conv2a(x)))
-        # 5
-        feature5 = self.dropout(self.lrelu(self.bn2b(self.conv2b(x))))
-        # 6
-        x , ind2 = self.pool(feature5)
-        # 7
-        x = self.lrelu(self.bn3a(self.conv3a(x)))
-        # 8
-        feature8 = self.dropout(self.lrelu(self.bn3b(self.conv3b(x))))
-        # 9
-        x, ind3 = self.pool(feature8)
-        # 10
-        x = self.lrelu(self.bn4a(self.conv4a(x)))
-        # 11
-        feature11 = self.dropout(self.lrelu(self.bn4b(self.conv4b(x))))
+        f8 = self.encoder_frontend(x)
+        f11 = self.encoder_backend(f8)
         
         # Score Head.
-        # 12
-        sx = self.dropout(self.bnSa(self.convSa(feature11)))
-        # 13
-        score = self.sigmoid(self.convSb(sx))
+        S = self.score_head(f11)    # B x 1 x H/8 x W/8
+
         # Location Head.
-        # 14 
-        lx = self.dropout(self.bnLa(self.convLa(feature11)))
-        # 15
-        location = self.tanh(self.convLb(lx))
+        P = self.location_head(f11) # B x 2 x H/8 x W/8
+
         # Descriptor Head.
-        # 16
-        dx = self.dropout(self.bnD1a(self.convD1a(feature11)))
-        # 17
-        dx = self.bnD1b(self.convD1b(dx))
-        # 18
-        feature18 = self.pixelShuffle(dx)
-        # 19
-        dx = self.bnD2a(self.convD2a(torch.cat((feature8, feature18), dim=1)))
-        # 20
-        descriptor = self.convD2b(dx)
+        f18 = self.descriptor_head_frontend(f11)
+        F = self.descriptor_head_backend(torch.cat((f8, f18), dim=1))   # B x 256 x H/4 x W/4
 
-        output = {'score': score, 'location': location, 'descriptor': descriptor}
+        # Convert local (relative) positions P to global pixel positions
+        Prel = rel_to_abs(P)         # B x 2 x H/8 x W/8
+
+        # flatten
+        B, _, H, W = x.shape
+        Sflat = S.view(B, -1)           # B x N (N = H/8 * W/8)
+        Pflat = P.view(B, 2, -1)        # B x 2 x N
+        Fflat = F.view(B, 256, -1)      # B x 256 x 4N
+        Prelflat = Prel.view(B, 2, -1)  # B x 2 x N
+
+        # # Get data with top K score (S)
+        # Smax, ids = torch.topk(Sflat, k=self.N, dim=1, largest=True, sorted=False)              # B x K(N = top K = 300)
+        # Pmax = torch.stack([Pflat[i,:,ids[i]] for i in range(ids.shape[0])], dim=0)             # B x 2 x K
+        # #Prelmax = torch.stack([Prelflat[i,:,ids[i]] for i in range(ids.shape[0])], dim=0)
+        # Fmax = torch.stack([Fflat[i,:,ids[i]] for i in range(ids.shape[0])], dim=0)             # B x 256 x K 
+
+        output = {
+            "S": Sflat,
+            "P": Pflat,
+            "F": Fflat,
+            "Prel": Prelflat,
+        }
+
         return output
-
 
 class IONet(BaseModel):
     """ Pytorch definition of IONet Network. 
         the structure from Brachmann & Rother (https://arxiv.org/abs/1905.04132)
     """
 
-
-    def __init__(self, num_classes=10):
+    def __init__(self):
         super().__init__()
         self.relu = nn.ReLU(inplace=True)
-        self.instNorm = nn.InstanceNorm1d(128)
         # 1
         self.conv1a = nn.Conv1d(5, 128, kernel_size=1, stride=1)
         # 2
-        self.conv2a = nn.Conv1d(128, 128, kernel_size=1, stride=1)
-        self.bn2a = nn.BatchNorm1d(128)
-        self.conv2b = nn.Conv1d(128, 128, kernel_size=1, stride=1)
-        self.bn2b = nn.BatchNorm1d(128)
+        self.rb2 = residual_block(128, 128)
         # 3
-        self.conv3a = nn.Conv1d(128, 128, kernel_size=1, stride=1)
-        self.bn3a = nn.BatchNorm1d(128)
-        self.conv3b = nn.Conv1d(128, 128, kernel_size=1, stride=1)
-        self.bn3b = nn.BatchNorm1d(128)
+        self.rb3 = residual_block(128, 128)
         # 4
-        self.conv4a = nn.Conv1d(128, 128, kernel_size=1, stride=1)
-        self.bn4a = nn.BatchNorm1d(128)
-        self.conv4b = nn.Conv1d(128, 128, kernel_size=1, stride=1)
-        self.bn4b = nn.BatchNorm1d(128)
+        self.rb4 = residual_block(128, 128)
         # 5
-        self.conv5a = nn.Conv1d(128, 128, kernel_size=1, stride=1)
-        self.bn5a = nn.BatchNorm1d(128)
-        self.conv5b = nn.Conv1d(128, 128, kernel_size=1, stride=1)
-        self.bn5b = nn.BatchNorm1d(128)
+        self.rb5 = residual_block(128, 128)
         # 6
         self.conv6a = nn.Conv1d(128, 1, kernel_size=1, stride=1)
 
@@ -178,18 +166,13 @@ class IONet(BaseModel):
         # 1
         f1 = self.relu(self.conv1a(x))
         # 2
-        f2 = self.relu(self.bn2a(self.instNorm(self.conv2a(f1))))
-        f2 = self.relu(self.bn2b(self.instNorm(self.conv2a(f2))))
+        f2 = self.rb2(f1)
         # 3
-        f3 = self.relu(self.bn3a(self.instNorm(self.conv2a(torch.add(f2, f1)))))
-        f3 = self.relu(self.bn3b(self.instNorm(self.conv2a(f3))))
+        f3 = self.rb3(torch.add(f2, f1))
         # 4
-        f4 = self.relu(self.bn4a(self.instNorm(self.conv2a(torch.add(f3, f2)))))
-        f4 = self.relu(self.bn4b(self.instNorm(self.conv2a(f4))))
+        f4 = self.rb4(torch.add(f3, f2))
         # 5
-        f5 = self.relu(self.bn5a(self.instNorm(self.conv2a(torch.add(f4, f3)))))
-        f5 = self.relu(self.bn5b(self.instNorm(self.conv2a(f5))))
+        f5 = self.rb5(torch.add(f4, f3))
         # 6
         label = self.conv6a(f5)
         return label
-        

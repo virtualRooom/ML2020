@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from base import BaseModel
-from utils import rel_to_abs, get_descriptor_by_pos, get_descriptor_by_pos_batch, brute_force_match
+from utils import rel_to_abs
 
 def vgg_block(in_channels, out_channels, pooling=True):
     max_pool = []
@@ -34,9 +34,7 @@ def residual_block(in_channels, out_channels):
     )
 
 class KeyPointNet(BaseModel):
-    """ Pytorch definition of KeyPointNet Network.
-        the structure from Jiexiong Tang (https://arxiv.org/abs/1912.10615)
-     """
+    """ Pytorch definition of KeyPointNet Network. """
 
     def __init__(self):
         super().__init__()
@@ -87,15 +85,14 @@ class KeyPointNet(BaseModel):
         )
 
     def forward(self, x):
-        """ Forward pass that jointly computes score, location and descriptor
+        """ Forward pass that jointly computes unprocessed point and descriptor
         tensors.
-
         Input
-        x: Image pytorch tensor shaped B x 3 x H x W.
+        x: Image pytorch tensor shaped N x 3 x H x W.
         Output
-        score: Output score pytorch tensor shaped B x 1 × H/8 × W/8
-        location: Output point pytorch tensor shaped B x 2 x H/8 x W/8.
-        descriptor: Output descriptor pytorch tensor shaped B x 256 x H/8 x W/8.
+        score: Output score pytorch tensor shaped N x 1 × H/8 × W/8
+        location: Output point pytorch tensor shaped N x 2 x H/8 x W/8.
+        descriptor: Output descriptor pytorch tensor shaped N x 256 x H/8 x W/8.
         """
         # Shared Encoder.
         f8 = self.encoder_frontend(x)
@@ -115,7 +112,7 @@ class KeyPointNet(BaseModel):
         P = rel_to_abs(Prel)         # B x 2 x H/8 x W/8
 
         # flatten
-        B = x.shape[0]
+        B, _, H, W = x.shape
         Sflat = S.view(B, -1)           # B x N (N = H/8 * W/8)
         Pflat = P.view(B, 2, -1)        # B x 2 x N
         Fflat = F.view(B, 256, -1)      # B x 256 x 4N
@@ -134,11 +131,11 @@ class KeyPointNet(BaseModel):
             "Prel": Prelflat,
         }
 
-        return output
+        return output, matches
 
 class IONet(BaseModel):
     """ Pytorch definition of IONet Network. 
-        the structure from Jiexiong Tang (https://arxiv.org/abs/1912.10615)
+        the structure from Brachmann & Rother (https://arxiv.org/abs/1905.04132)
     """
 
     def __init__(self):
@@ -177,73 +174,5 @@ class IONet(BaseModel):
         # 5
         f5 = self.rb5(torch.add(f4, f3))
         # 6
-        R = self.conv6a(f5)
-        return R
-
-
-class KP2DNet(BaseModel):
-    """ Pytorch definition of entire Network. 
-        the structure from Jiexiong Tang (https://arxiv.org/abs/1912.10615)
-    """
-
-    def __init__(self):
-        super().__init__()
-        self.image_shape = (3, 240, 320)
-
-        self.KPN = KeyPointNet()
-        self.ION = IONet()
-
-    def forward(self, img, warp, homog):
-        """Forward pass through the KeyPointNet and IONet.
-
-        Args:
-            img (pytorch tensor shaped B x 3 x H x W): 3-channel images
-            warp (pytorch tensor shaped B x 3 x H x W): 3-channel images warped by homography matrix
-            homog (pytorch tensor shaped B x ? x ?) : homography matrixs transform 'img' to 'warp'
-
-        Returns:
-            ouputs (data dictionary) : data used to calculate the loss function
-        """        
-        A = self.KPN(img)
-        B = self.KPN(warp)
-        matches = self.match_by_descriptor(A, B)
-        # pytorch tensor shaped B x 1 x N : the probability that a point-pair belongs to an inlier set
-        R = self.ION(matches)
-
-        outputs = {
-            'A': A,
-            'B': B,
-            'PP': matches,
-            'R': R,
-            'H': homog,
-        }
-        return outputs
-
-
-    def match_by_descriptor(self, A, B):
-        AS = A['S']         # B x N (N = H/8 * W/8)
-        AP = A['P']         # B x 2 x N
-        AF = A['F']         # B x 256 x 4N, 'fs' in paper
-
-        BS = B['S']         # B x N (N = H/8 * W/8)
-        BP = B['P']         # B x 2 x N
-        BF = B['F']         # B x 256 x 4N, 'ft' in paper
-
-         # Get data with lowest K score (S)
-        k = 300
-        _, ids = torch.topk(AS, k, dim=1, largest=False, sorted=False)                  # B x K
-        APmax = torch.stack([AP[i, :, ids[i]] for i in range(ids.shape[0])], dim=0)     # B x 2 x K
-        
-        AFmax, _ = get_descriptor_by_pos_batch(APmax, AF, self.image_shape)                      # B x 256 x k
-
-        _, ids = torch.topk(BS, k, dim=1, largest=False, sorted=False)                  # B x 2 x K
-        BPmax = torch.stack([BP[i, :, ids[i]] for i in range(ids.shape[0])], dim=0)     # B x 2 x K
-        
-        BFmax, _ = get_descriptor_by_pos_batch(BPmax, BF, self.image_shape)                      # B x 256 x k
-
-        dists, Bids = brute_force_match(AFmax, BFmax)                                   # both B x K
-        Bmatch = torch.stack([BP[i, :, Bids[i]] for i in range(Bids.shape[0])], dim=0)  # B x 2 x K
-
-        matches = torch.cat([APmax, Bmatch, dists.unsqueeze(1)], dim=1)                               # B x 5 x K
-
-        return matches  # B x 5 x K
+        label = self.conv6a(f5)
+        return label

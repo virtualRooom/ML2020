@@ -1,16 +1,16 @@
 {
-    "name": "Mnist_LeNet",
+    "name": "COCO_KP2D",
     "n_gpu": 1,
 
     "arch": {
-        "type": "MnistModel",
+        "type": "KP2DNet",
         "args": {}
     },
     "data_loader": {
-        "type": "MnistDataLoader",
+        "type": "HomoAdapDataLoader",
         "args":{
-            "data_dir": "data/",
-            "batch_size": 128,
+            "data_dir": "images/",
+            "batch_size": 1,
             "shuffle": true,
             "validation_split": 0.1,
             "num_workers": 2
@@ -24,19 +24,19 @@
             "amsgrad": true
         }
     },
-    "loss": "nll_loss",
+    "loss": "KP2D_loss",
     "metrics": [
-        "accuracy", "top_k_acc"
+        
     ],
     "lr_scheduler": {
         "type": "StepLR",
         "args": {
-            "step_size": 50,
-            "gamma": 0.1
+            "step_size": 40,
+            "gamma": 0.5
         }
     },
     "trainer": {
-        "epochs": 100,
+        "epochs": 50,
 
         "save_dir": "saved/",
         "save_period": 1,

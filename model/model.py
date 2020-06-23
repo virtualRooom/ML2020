@@ -1,7 +1,9 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
+import torch.nn.functional as functional
 from base import BaseModel
+
+import utils
 from utils import rel_to_abs, get_descriptor_by_pos, get_descriptor_by_pos_batch, brute_force_match
 
 def vgg_block(in_channels, out_channels, pooling=True):
@@ -12,11 +14,10 @@ def vgg_block(in_channels, out_channels, pooling=True):
     return nn.Sequential(
         nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=1, padding=1),
         nn.BatchNorm2d(out_channels),
-        nn.LeakyReLU(inplace=True),
-
+        nn.LeakyReLU(inplace=False),
         nn.Conv2d(out_channels, out_channels, kernel_size=3, stride=1, padding=1),
         nn.BatchNorm2d(out_channels),
-        nn.LeakyReLU(inplace=True),
+        nn.LeakyReLU(inplace=False),
         nn.Dropout2d(p=0.2, inplace=True),
         *max_pool
     )
@@ -86,19 +87,21 @@ class KeyPointNet(BaseModel):
             nn.Conv2d(256, 256, kernel_size=3, stride=1, padding=1),
         )
 
-    def forward(self, x):
+    def forward(self, image):
         """ Forward pass that jointly computes score, location and descriptor
         tensors.
 
         Input
-        x: Image pytorch tensor shaped B x 3 x H x W.
+        image: Image pytorch tensor shaped B x 3 x H x W.
         Output
         score: Output score pytorch tensor shaped B x 1 × H/8 × W/8
         location: Output point pytorch tensor shaped B x 2 x H/8 x W/8.
         descriptor: Output descriptor pytorch tensor shaped B x 256 x H/8 x W/8.
         """
+        B, _ , H, W = image.shape
+
         # Shared Encoder.
-        f8 = self.encoder_frontend(x)
+        f8 = self.encoder_frontend(image)
         f11 = self.encoder_backend(f8)
         
         # Score Head.
@@ -113,19 +116,22 @@ class KeyPointNet(BaseModel):
 
         # Convert local (relative) positions P to global pixel positions
         P = rel_to_abs(Prel)         # B x 2 x H/8 x W/8
-
+               
         # flatten
-        B = x.shape[0]
         Sflat = S.view(B, -1)           # B x N (N = H/8 * W/8)
         Pflat = P.view(B, 2, -1)        # B x 2 x N
-        Fflat = F.view(B, 256, -1)      # B x 256 x 4N
         Prelflat = Prel.view(B, 2, -1)  # B x 2 x N
+        Fflat = F.view(B, 256, -1)      # B x 256 x N(or 4N)
 
-        # # Get data with top K score (S)
-        # Smax, ids = torch.topk(Sflat, k=self.N, dim=1, largest=True, sorted=False)              # B x K(N = top K = 300)
-        # Pmax = torch.stack([Pflat[i,:,ids[i]] for i in range(ids.shape[0])], dim=0)             # B x 2 x K
-        # #Prelmax = torch.stack([Prelflat[i,:,ids[i]] for i in range(ids.shape[0])], dim=0)
-        # Fmax = torch.stack([Fflat[i,:,ids[i]] for i in range(ids.shape[0])], dim=0)             # B x 256 x K 
+        # choice 1: downsample
+        # F = functional.interpolate(F, (H//8, W//8), mode='bicubic', align_corners=True)   # B x 256 x H/8 x W/8
+        # Fflat = F.view(B, 256, -1)      # B x 256 x N(or 4N)
+
+        # choice 2: upsample
+        # F = functional.interpolate(F, (H, W), mode='bicubic', align_corners=True)   # B x 256 x H x W
+        # Pl = P.long()
+        # F = torch.stack([F[i, :, Pl[i, 1], Pl[i, 0]] for i in range(B)], dim=0)
+        # Fflat = F.view(B, 256, -1)      # B x 256 x N(or 4N)
 
         output = {
             "S": Sflat,
@@ -143,7 +149,7 @@ class IONet(BaseModel):
 
     def __init__(self):
         super().__init__()
-        self.relu = nn.ReLU(inplace=True)
+        self.relu = nn.ReLU(inplace=False)
         # 1
         self.conv1a = nn.Conv1d(5, 128, kernel_size=1, stride=1)
         # 2
@@ -167,7 +173,8 @@ class IONet(BaseModel):
         label: binary inlier-outlier classification pytorch tensor shaped 1 x N
         """
         # 1
-        f1 = self.relu(self.conv1a(x))
+        # f1 = self.relu(self.conv1a(x))
+        f1 = functional.relu(self.conv1a(x))
         # 2
         f2 = self.rb2(f1)
         # 3
@@ -179,7 +186,6 @@ class IONet(BaseModel):
         # 6
         R = self.conv6a(f5)
         return R
-
 
 class KP2DNet(BaseModel):
     """ Pytorch definition of entire Network. 
@@ -219,31 +225,174 @@ class KP2DNet(BaseModel):
         }
         return outputs
 
+    # def match_by_descriptor(self, A, B):
+    #     AS = A['S']         # B x N (N = H/8 * W/8)
+    #     AP = A['P']         # B x 2 x N
+    #     AF = A['F']         # B x 256 x 4N, 'fs' in paper
 
+    #     BS = B['S']         # B x N (N = H/8 * W/8)
+    #     BP = B['P']         # B x 2 x N
+    #     BF = B['F']         # B x 256 x 4N, 'ft' in paper
+
+    #      # Get data with lowest K score (S)
+    #     k = 300
+    #     _, ids = torch.topk(AS, k, dim=1, largest=False, sorted=False)                  # B x K
+    #     APmax = torch.stack([AP[i, :, ids[i]] for i in range(ids.shape[0])], dim=0)     # B x 2 x K
+        
+    #     AFmax, _ = get_descriptor_by_pos_batch(APmax, AF, self.image_shape)             # B x 256 x k
+
+    #     _, ids = torch.topk(BS, k, dim=1, largest=False, sorted=False)                  # B x 2 x K
+    #     BPmax = torch.stack([BP[i, :, ids[i]] for i in range(ids.shape[0])], dim=0)     # B x 2 x K
+        
+    #     BFmax, _ = get_descriptor_by_pos_batch(BPmax, BF, self.image_shape)             # B x 256 x k
+
+    #     dists, Bids = brute_force_match(AFmax, BFmax)                                   # both B x K
+    #     Bmatch = torch.stack([BP[i, :, Bids[i]] for i in range(Bids.shape[0])], dim=0)  # B x 2 x K
+
+    #     matches = torch.cat([APmax, Bmatch, dists.unsqueeze(1)], dim=1)                 # B x 5 x K
+
+    #     return matches  # B x 5 x K
+    
     def match_by_descriptor(self, A, B):
         AS = A['S']         # B x N (N = H/8 * W/8)
         AP = A['P']         # B x 2 x N
-        AF = A['F']         # B x 256 x 4N, 'fs' in paper
+        AF = A['F']         # B x 256 x N, 'fs' in paper
 
         BS = B['S']         # B x N (N = H/8 * W/8)
         BP = B['P']         # B x 2 x N
-        BF = B['F']         # B x 256 x 4N, 'ft' in paper
+        BF = B['F']         # B x 256 x N, 'ft' in paper
 
          # Get data with lowest K score (S)
         k = 300
         _, ids = torch.topk(AS, k, dim=1, largest=False, sorted=False)                  # B x K
         APmax = torch.stack([AP[i, :, ids[i]] for i in range(ids.shape[0])], dim=0)     # B x 2 x K
-        
-        AFmax, _ = get_descriptor_by_pos_batch(APmax, AF, self.image_shape)                      # B x 256 x k
+        AFmax = torch.stack([AF[i,:,ids[i]] for i in range(ids.shape[0])], dim=0)        # B x 256 x K
 
         _, ids = torch.topk(BS, k, dim=1, largest=False, sorted=False)                  # B x 2 x K
-        BPmax = torch.stack([BP[i, :, ids[i]] for i in range(ids.shape[0])], dim=0)     # B x 2 x K
-        
-        BFmax, _ = get_descriptor_by_pos_batch(BPmax, BF, self.image_shape)                      # B x 256 x k
+        # BPmax = torch.stack([BP[i, :, ids[i]] for i in range(ids.shape[0])], dim=0)     # B x 2 x K
+        BFmax = torch.stack([BF[i,:,ids[i]] for i in range(ids.shape[0])], dim=0)       # B x 256 x K
 
         dists, Bids = brute_force_match(AFmax, BFmax)                                   # both B x K
-        Bmatch = torch.stack([BP[i, :, Bids[i]] for i in range(Bids.shape[0])], dim=0)  # B x 2 x K
+        BPmatch = torch.stack([BP[i, :, Bids[i]] for i in range(Bids.shape[0])], dim=0)  # B x 2 x K
 
-        matches = torch.cat([APmax, Bmatch, dists.unsqueeze(1)], dim=1)                               # B x 5 x K
+        matches = torch.cat([APmax, BPmatch, dists.unsqueeze(1)], dim=1)                 # B x 5 x K
 
         return matches  # B x 5 x K
+
+
+# from https://github.com/ErikOrjehag/sfmnet/blob/5b4001b3950937f604bd394ec2bb14199c1c56d7/networks/unsuperpoint.py
+def conv(in_channels, out_channels):
+    # Create conv2d layer
+    return nn.Conv2d(in_channels=in_channels, out_channels=out_channels, kernel_size=3, stride=1, padding=1)
+
+def bb_conv(in_channels, out_channels, last_layer=False):
+    # Create 2 conv layers separated by batch norm and leaky relu
+    if last_layer:
+        last = []
+    else:
+        last = [nn.BatchNorm2d(num_features=out_channels),
+                nn.LeakyReLU(inplace=True)]
+    return nn.Sequential(
+        conv(in_channels, out_channels),
+        nn.BatchNorm2d(num_features=out_channels),
+        nn.LeakyReLU(inplace=True),
+        conv(out_channels, out_channels),
+        *last
+    )
+
+class UnsuperPoint(BaseModel):
+
+    def __init__(self, N):
+        super().__init__()
+        self.N = N
+        self.backbone = nn.Sequential(
+            bb_conv(3, 32),
+            nn.MaxPool2d(kernel_size=2),
+            bb_conv(32, 64),
+            nn.MaxPool2d(kernel_size=2),
+            bb_conv(64, 128),
+            nn.MaxPool2d(kernel_size=2),
+            bb_conv(128, 256, last_layer=True),
+        )
+
+        self.score_decoder = nn.Sequential(
+            conv(256, 256),
+            nn.BatchNorm2d(num_features=256),
+            nn.LeakyReLU(inplace=True),
+            conv(256, 1),
+            nn.Sigmoid(),
+        )
+
+        self.position_decoder = nn.Sequential(
+            conv(256, 256),
+            nn.BatchNorm2d(num_features=256),
+            nn.LeakyReLU(inplace=True),
+            conv(256, 2),
+            nn.Sigmoid(),
+        )
+
+        self.descriptor_decoder = nn.Sequential(
+            conv(256, 256),
+            nn.BatchNorm2d(num_features=256),
+            nn.LeakyReLU(inplace=True),
+            conv(256, 256),
+        )
+
+    def forward(self, image):
+
+        B, _, H, W = image.shape
+        image = utils.normalize_image(image)
+        
+        # CNN (joint backbone, separate decoder heads)
+        features = self.backbone(image)
+        S = self.score_decoder(features)
+        Prel = self.position_decoder(features)
+        F = self.descriptor_decoder(features)
+        
+        # Relative to absolute pixel coordinates
+        P = self.rel_to_abs(Prel)
+        
+        # Flatten
+        Sflat = S.view(B, -1)
+        Pflat = P.view(B, 2, -1)
+        Prelflat = Prel.view(B, 2, -1)
+        Fflat = F.view(B, 256, -1)
+
+        # Get data with top N score (S)
+        Smax, ids = torch.topk(Sflat, k=self.N, dim=1, largest=True, sorted=False)
+        Pmax = torch.stack([Pflat[i,:,ids[i]] for i in range(ids.shape[0])], dim=0)
+        Fmax = torch.stack([Fflat[i,:,ids[i]] for i in range(ids.shape[0])], dim=0)
+
+        outputs = {
+            "S": Smax,
+            "P": Pmax,
+            "Prel": Prelflat,
+            "F": Fmax,
+        }
+
+        return outputs
+
+    def rel_to_abs(self, P):
+        # Convert local (relative) positions P to global pixel positions
+        B, _, H, W = P.shape
+        cols = torch.arange(0, W, device=P.device).view(1, 1, W).expand(B, H, W)
+        rows = torch.arange(0, H, device=P.device).view(1, H, 1).expand(B, H, W)
+        return (P + torch.stack((cols, rows), dim=1)) * 8
+
+class SiameseUnsuperPoint(BaseModel):
+
+    def __init__(self, N=200):
+        super().__init__()
+        self.unsuperpoint = UnsuperPoint(N=N)
+
+    def forward(self, img, warp, homog):
+        A = self.unsuperpoint(img)
+        B = self.unsuperpoint(warp)
+        outputs = {
+            "A": A,
+            "B": B,
+            'img':img,
+            'warp': warp,
+            "homography":homog,
+        }
+        return outputs

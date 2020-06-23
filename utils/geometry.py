@@ -22,16 +22,17 @@ def rel_to_abs(Prel, sigma1=2.0, sigma2=8.0):
     B, _, H, W = Prel.shape
     # center of each cell
     cols = torch.arange((sigma2 - 1) / 2, sigma2 * W, sigma2,
-                        device=Prel.device).view(1, 1, W).expand(B, H, W)
+                        device=Prel.device, requires_grad=True).view(1, 1, W).expand(B, H, W)
 
     rows = torch.arange((sigma2 - 1) / 2, sigma2 * H, sigma2,
-                        device=Prel.device).view(1, H, 1).expand(B, H, W)
+                        device=Prel.device, requires_grad=True).view(1, H, 1).expand(B, H, W)
     
-    cols = c * Prel[:, 0, :, :] + cols
-    rows = c * Prel[:, 1, :, :] + rows
+    # may out of image bound
+    cols = c * Prel[:, 1, :, :] + cols
+    rows = c * Prel[:, 0, :, :] + rows
 
-    cols = torch.clamp(cols, min=0.01, max=W*8.-.01)
-    rows = torch.clamp(rows, min=0.01, max=H*8.-.01)
+    cols = torch.clamp(cols, min=0.01, max=W*8.-1.01)
+    rows = torch.clamp(rows, min=0.01, max=H*8.-1.01)
 
     P = torch.stack((cols, rows), dim=1)
     return P

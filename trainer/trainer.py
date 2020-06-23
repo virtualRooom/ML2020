@@ -38,16 +38,20 @@ class Trainer(BaseTrainer):
         """
         self.model.train()
         self.train_metrics.reset()
-    
-        # TODO: data_loader
+
+        torch.autograd.set_detect_anomaly(True)
+        
         for batch_idx, (data, target, homography) in enumerate(self.data_loader):
-            data, target, homography = data.to(self.device), target.to(self.device), homography.to(self.device)
+            data, target, homography = data.to(self.device), target.to(self.device), homography.requires_grad_().to(self.device)
 
             self.optimizer.zero_grad()
             output = self.model(data, target, homography)
             loss = self.criterion(output)
             loss.backward()
             self.optimizer.step()
+            
+            # test
+            # torch.cuda.empty_cache()
 
             self.writer.set_step((epoch - 1) * self.len_epoch + batch_idx)
             self.train_metrics.update('loss', loss.item())
@@ -60,6 +64,7 @@ class Trainer(BaseTrainer):
                     self._progress(batch_idx),
                     loss.item()))
                 self.writer.add_image('input', make_grid(data.cpu(), nrow=8, normalize=True))
+                self.writer.add_image('target', make_grid(target.cpu(), nrow=8, normalize=True))
 
             if batch_idx == self.len_epoch:
                 break

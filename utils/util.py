@@ -203,8 +203,8 @@ def discard_outside_points(P, img_size):
     """    
     _, H, W = img_size
 
-    m1 = P[0,:].le(W-0.01)
-    m2 = P[1,:].le(H-0.01)
+    m1 = P[0,:].le(H-0.01)
+    m2 = P[1,:].le(W-0.01)
     mask = m1 & m2
 
     P = P.masked_select(mask).reshape(2,-1)
@@ -226,9 +226,9 @@ def get_descriptor_by_pos(P, F, image_size):
     W = image_size[-1]
 
     # # map point to cell
-    P = (P // 4).long()
-    m = torch.tensor([1, W/4]).long()
-    idx = m @ P                         # 1xN vector
+    P = P // 4
+    m = torch.tensor([1., W/4.]).to(P.device)
+    idx = (m @ P).long()                         # 1xN vector
     descriptor = F[:,idx]               # 256 x N tensor
 
     return descriptor, idx  # 256xN tensor, 1xN vector
@@ -244,15 +244,14 @@ def get_descriptor_by_pos_batch(P, F, image_shape):
         descriptor (pytorch tensor shaped B x 256 x N): the associated descriptor of key points
         idx_ (pytorch tensor shaped B x N): the descriptor id in the descriptor map(F)
     """
-    # TODO - to GPU
     B = P.shape[0]
     image_width = image_shape[-1]
 
-    # # map point to cell
-    P = (P // 4).long()
-    m = torch.tensor([1, image_width/4]).repeat(B,1,1).long()
+    # map point to cell
+    P = P // 4
+    m = torch.tensor([1., image_width/4.]).repeat(B,1,1).to(P.device)
     idx = torch.bmm(m, P)              # B x 1 x N tensor
-    idx_ = idx.view(idx.shape[0], -1)   # B x N vector
+    idx_ = idx.view(idx.shape[0], -1).long()   # B x N vector
 
     descriptor = torch.stack([F[i,:,idx_[i]] for i in range(idx_.shape[0])], dim=0) # B x 256 x N
 

@@ -1,16 +1,16 @@
 {
-    "name": "COCO_KP2D",
+    "name": "COCO_Unsuper",
     "n_gpu": 1,
 
     "arch": {
-        "type": "KP2DNet",
+        "type": "SiameseUnsuperPoint",
         "args": {}
     },
     "data_loader": {
         "type": "HomoAdapDataLoader",
         "args":{
             "data_dir": "data/train2017",
-            "batch_size": 1,
+            "batch_size": 8,
             "shuffle": true,
             "validation_split": 0.0,
             "num_workers": 2
@@ -24,7 +24,7 @@
             "amsgrad": true
         }
     },
-    "loss": "KP2D_loss",
+    "loss": "Unsuper_loss",
     "metrics": [
         
     ],
